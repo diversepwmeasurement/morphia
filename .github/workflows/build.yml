@@ -1,159 +1,155 @@
-name: Build Project
-
-on:
-  push:
-    branches-ignore:
-      - 'dependabot/**'
-    tags:
-      - '*'
-  workflow_dispatch:
-
 jobs:
-  CodeAudits:
-    uses: evanchooly/workflows/.github/workflows/code-audits.yml@master
-    with:
-      java: 17
-
   Build:
     uses: evanchooly/workflows/.github/workflows/build.yml@master
     with:
       java: 17
       saveBuild: true
-
-  Matrix:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          java-version: 17
-          distribution: 'temurin'
-          server-id: central
-          cache: maven
-
-      - name: Setup JBang
-        uses: jbangdev/setup-jbang@main
-
-      - name: Find MongoDB versions
-        id: mongo-versions
-        run: |
-          echo "mongo_versions=$( jbang .github/BuildMatrix.java )" >> $GITHUB_OUTPUT
-
-      - name: Find Latest Driver version
-        id: latest-driver-version
-        run: |
-          echo "latest_driver_version=$( jbang .github/DriverVersions.java latest)" >> $GITHUB_OUTPUT
-
-      - name: Find Driver versions
-        id: driver-versions
-        run: |
-          echo "driver_versions=$( jbang .github/DriverVersions.java all)" >> $GITHUB_OUTPUT
-
-      - name: Is releasable branch
-        id: releasable
-        run: |
-          if [ "${{ github.event.ref }}" == 'refs/heads/master' ] \
-            || [ "${{ github.event.ref }}" == 'refs/heads/main' ] \
-            || [[ "${{ github.event.ref }}" =~ ^refs/heads/[0-9]+\.[0-9]+\.x$ ]] \
-            || [[ "${{ github.event.ref }}" =~ ^refs/tags/v[0-9]+\.[0-9]+.[0-9]+$ ]]
-          then
-            echo "releasable=true" >> $GITHUB_OUTPUT
-          else
-            echo "releasable=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Find Driver snapshot version
-        id: driver-snapshot
-        run: |
-          echo "driver_snapshot=$( jbang .github/DriverSnapshot.java )" >> $GITHUB_OUTPUT
-
-    outputs:
-      driver_latest: ${{ steps.latest-driver-version.outputs.latest_driver_version }}
-      driver_matrix: ${{ steps.driver-versions.outputs.driver_versions }}
-      version_matrix: ${{ steps.mongo-versions.outputs.mongo_versions }}
-      releasable: ${{ steps.releasable.outputs.releasable }}
-      driver_snapshot: ${{ steps.driver-snapshot.outputs.driver_snapshot }}
-
-  ServerTests:
-    name: Server
-    needs:
-      - Build
-      - Matrix
-    strategy:
-      fail-fast: false
-      matrix:
-        mongo: ${{ fromJson(needs.matrix.outputs.version_matrix) }}
-        driver: ${{ fromJson(needs.matrix.outputs.driver_latest) }}
-        java: [ 17 ]
-    uses: evanchooly/workflows/.github/workflows/build.yml@master
+  CodeAudits:
+    uses: evanchooly/workflows/.github/workflows/code-audits.yml@master
     with:
-      java: ${{ matrix.java }}
-      reuseBuild: true
-      archive-name: "${{matrix.mongo}}-${{matrix.driver}}-${{matrix.java}}-${{github.run_id}}"
-      maven-flags: "-e -Dmongodb=${{ matrix.mongo }} -Ddriver.version=${{ matrix.driver }}"
-
+      java: 17
+  Docs:
+    name: Update Documentation
+    needs:
+    - Release
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      name: Invoke antora build
+      uses: benc-uk/workflow-dispatch@v1
+      with:
+        ref: refs/heads/master
+        repo: MorphiaOrg/morphia-docs
+        token: ${{ secrets.GH_PUSH_TOKEN }}
+        workflow: Docs
   DriversTests:
     name: Driver
     needs:
-      - Build
-      - Matrix
+    - Build
+    - Matrix
     strategy:
       fail-fast: false
       matrix:
         driver: ${{ fromJson(needs.matrix.outputs.driver_matrix) }}
-        java: [ 17 ]
-        mongo: [ 7 ]
         include:
-          - driver: ${{ fromJson(needs.matrix.outputs.driver_latest)[0] }}
-            java: 21
-            mongo: 7
-          - driver: ${{ fromJson(needs.matrix.outputs.driver_latest)[0] }}
-            java: 22
-            mongo: 7
-            optional: tre
-          - driver: ${{ needs.matrix.outputs.driver_snapshot }}
-            java: 17
-            mongo: 7
-            optional: true
+        - driver: ${{ fromJson(needs.matrix.outputs.driver_latest)[0] }}
+          java: 21
+          mongo: 7
+        - driver: ${{ fromJson(needs.matrix.outputs.driver_latest)[0] }}
+          java: 22
+          mongo: 7
+          optional: tre
+        - driver: ${{ needs.matrix.outputs.driver_snapshot }}
+          java: 17
+          mongo: 7
+          optional: true
+        java:
+        - 17
+        mongo:
+        - 7
     uses: evanchooly/workflows/.github/workflows/build.yml@master
     with:
+      archive-name: ${{matrix.mongo}}-${{matrix.driver}}-${{matrix.java}}-${{github.run_id}}
       java: ${{ matrix.java }}
-      reuseBuild: true
-      archive-name: "${{matrix.mongo}}-${{matrix.driver}}-${{matrix.java}}-${{github.run_id}}"
-      maven-flags: "-e -Dmongodb=${{ matrix.mongo }} -Ddriver.version=${{ matrix.driver }}"
+      maven-flags: -e -Dmongodb=${{ matrix.mongo }} -Ddriver.version=${{ matrix.driver
+        }}
       optional: ${{ matrix.optional == true }}
+      reuseBuild: true
+  Matrix:
+    outputs:
+      driver_latest: ${{ steps.latest-driver-version.outputs.latest_driver_version
+        }}
+      driver_matrix: ${{ steps.driver-versions.outputs.driver_versions }}
+      driver_snapshot: ${{ steps.driver-snapshot.outputs.driver_snapshot }}
+      releasable: ${{ steps.releasable.outputs.releasable }}
+      version_matrix: ${{ steps.mongo-versions.outputs.mongo_versions }}
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      name: Checkout
+      uses: actions/checkout@v4
+    - continue-on-error: true
+      name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        cache: maven
+        distribution: temurin
+        java-version: 17
+        server-id: central
+    - continue-on-error: true
+      name: Setup JBang
+      uses: jbangdev/setup-jbang@main
+    - continue-on-error: true
+      id: mongo-versions
+      name: Find MongoDB versions
+      run: 'echo "mongo_versions=$( jbang .github/BuildMatrix.java )" >> $GITHUB_OUTPUT
 
+        '
+    - continue-on-error: true
+      id: latest-driver-version
+      name: Find Latest Driver version
+      run: 'echo "latest_driver_version=$( jbang .github/DriverVersions.java latest)"
+        >> $GITHUB_OUTPUT
+
+        '
+    - continue-on-error: true
+      id: driver-versions
+      name: Find Driver versions
+      run: 'echo "driver_versions=$( jbang .github/DriverVersions.java all)" >> $GITHUB_OUTPUT
+
+        '
+    - continue-on-error: true
+      id: releasable
+      name: Is releasable branch
+      run: "if [ \"${{ github.event.ref }}\" == 'refs/heads/master' ] \\\n  || [ \"\
+        ${{ github.event.ref }}\" == 'refs/heads/main' ] \\\n  || [[ \"${{ github.event.ref\
+        \ }}\" =~ ^refs/heads/[0-9]+\\.[0-9]+\\.x$ ]] \\\n  || [[ \"${{ github.event.ref\
+        \ }}\" =~ ^refs/tags/v[0-9]+\\.[0-9]+.[0-9]+$ ]]\nthen\n  echo \"releasable=true\"\
+        \ >> $GITHUB_OUTPUT\nelse\n  echo \"releasable=false\" >> $GITHUB_OUTPUT\n\
+        fi\n"
+    - continue-on-error: true
+      id: driver-snapshot
+      name: Find Driver snapshot version
+      run: 'echo "driver_snapshot=$( jbang .github/DriverSnapshot.java )" >> $GITHUB_OUTPUT
+
+        '
   Release:
-    needs:
-      - Matrix
-      - CodeAudits
-      - ServerTests
-      - DriversTests
     if: needs.Matrix.outputs.releasable == 'true'
+    needs:
+    - Matrix
+    - CodeAudits
+    - ServerTests
+    - DriversTests
+    secrets:
+      GH_PUSH_TOKEN: ${{ secrets.GH_PUSH_TOKEN }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PUBLIC_KEY: ${{ secrets.GPG_PUBLIC_KEY }}
+      SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+      SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
     uses: evanchooly/workflows/.github/workflows/jreleaser.yml@master
     with:
       java: 17
-    secrets:
-      GH_PUSH_TOKEN       : ${{ secrets.GH_PUSH_TOKEN }}
-      GPG_PASSPHRASE      : ${{ secrets.GPG_PASSPHRASE }}
-      GPG_PUBLIC_KEY      : ${{ secrets.GPG_PUBLIC_KEY }}
-      GPG_PRIVATE_KEY     : ${{ secrets.GPG_PRIVATE_KEY }}
-      SONATYPE_USERNAME   : ${{ secrets.SONATYPE_USERNAME }}
-      SONATYPE_PASSWORD   : ${{ secrets.SONATYPE_PASSWORD }}
-
-  Docs:
-    name: Update Documentation
-    runs-on: ubuntu-latest
+  ServerTests:
+    name: Server
     needs:
-      - Release
-    steps:
-      - name: Invoke antora build
-        uses: benc-uk/workflow-dispatch@v1
-        with:
-          workflow: Docs
-          repo: MorphiaOrg/morphia-docs
-          token: ${{ secrets.GH_PUSH_TOKEN }}
-          ref: refs/heads/master
+    - Build
+    - Matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        driver: ${{ fromJson(needs.matrix.outputs.driver_latest) }}
+        java:
+        - 17
+        mongo: ${{ fromJson(needs.matrix.outputs.version_matrix) }}
+    uses: evanchooly/workflows/.github/workflows/build.yml@master
+    with:
+      archive-name: ${{matrix.mongo}}-${{matrix.driver}}-${{matrix.java}}-${{github.run_id}}
+      java: ${{ matrix.java }}
+      maven-flags: -e -Dmongodb=${{ matrix.mongo }} -Ddriver.version=${{ matrix.driver
+        }}
+      reuseBuild: true
+name: Build Project
+on:
+  repository_dispatch:
+    types: trigger-ga___build.yml
